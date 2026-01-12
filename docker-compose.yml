@@ -1,0 +1,91 @@
+networks:
+  kafka-net:
+    driver: bridge
+
+services:
+  kafka:
+    image: quay.io/debezium/kafka:3.4
+    container_name: kafka
+    # Kafka 리스너가 컨테이너와 연결되도록 보장
+    hostname: kafka
+    networks:
+      - kafka-net
+
+    environment:
+      # 클러스터 고유 식별자 (클러스터 내 모든 노드는 동일한 클러스터 ID를 가짐)
+      CLUSTER_ID: local-cluster
+      # RAFT 프로토콜에서 사용되는 노드 식별자 (클러스터 내에서 고유) 
+      NODE_ID: 1
+      # 클러스터 내 노드 역할 (컨트롤러, 브로커 또는 둘다)
+      NODE_ROLE: combined
+      # # kafka 컨트롤러 쿼럼에서 투표자 역할을 하는 노드 지정 (NODE_ID@host:port)
+      # KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      # kafka 리스너의 내부 엔드포인트 및 프로토콜 정의
+      KAFKA_LISTENERS: PLAINTEXT://kafka:9092,CONTROLLER://kafka:9093
+      # 브로커가 외부 클라이언트에 자신을 알리는 방법을 지정
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+
+  mysql:
+    image: quay.io/debezium/example-mysql:3.4
+    container_name: mysql
+    networks:
+      - kafka-net
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: debezium
+      MYSQL_USER: mysqluser
+      MYSQL_PASSWORD: mysqlpw
+
+  connect:
+    # Kafka Connect 서비스 
+    image: quay.io/debezium/connect:3.4
+    container_name: connect
+    networks:
+      - kafka-net
+    ports:
+      - "8083:8083"
+    depends_on:
+      - kafka
+      - mysql
+    environment:
+      BOOTSTRAP_SERVERS: kafka:9092
+      GROUP_ID: 1
+      CONFIG_STORAGE_TOPIC: my_connect_configs
+      OFFSET_STORAGE_TOPIC: my_connect_offsets
+      STATUS_STORAGE_TOPIC: my_connect_statuses
+
+  init-connect:
+    image: alpine:3.19
+    container_name: init-conntect
+    networks:
+      - kafka-net
+    depends_on:
+      - connect
+    volumes:
+      - ./init-connect.sh:/init-connect.sh
+      - ./connectors:/connectors
+    entrypoint: >
+      sh -c "
+      apk add --no-cache curl jq &&
+      sh /init-connect.sh
+      "
+    restart: "no"
+
+  watcher:
+    image: quay.io/debezium/kafka:3.4
+    container_name: watcher
+    networks:
+      - kafka-net
+    depends_on:
+      - kafka
+    environment:
+      KAFKA_BROKER: kafka:9092
+      KAFKA_LISTENERS: PLAINTEXT://watcher:9092,CONTROLLER://watcher:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://watcher:9092
+    command:
+      - watch-topic
+      - -a
+      - -k
+      - dbserver1.inventory.customers
+
